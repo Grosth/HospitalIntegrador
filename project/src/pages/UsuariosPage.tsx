@@ -9,7 +9,7 @@ export function UsuariosPage() {
   const [roles, setRoles] = useState<Rol[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // estado para crear usuario
+  // estado para crear / editar usuario
   const [showForm, setShowForm] = useState(false);
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoApellido, setNuevoApellido] = useState('');
@@ -18,6 +18,7 @@ export function UsuariosPage() {
   const [nuevoRolId, setNuevoRolId] = useState<number | ''>('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [editingUser, setEditingUser] = useState<Usuario | null>(null);
 
   // si el usuario logueado es ADMIN
   const [isAdmin, setIsAdmin] = useState(false);
@@ -109,12 +110,38 @@ export function UsuariosPage() {
     }
   };
 
-  const handleCreateUser = async (e: FormEvent) => {
+  // Entrar en modo "nuevo usuario"
+  const startCreateUser = () => {
+    setEditingUser(null);
+    setNuevoNombre('');
+    setNuevoApellido('');
+    setNuevoEmail('');
+    setNuevoPassword('');
+    setNuevoRolId('');
+    setCreateError('');
+    setShowForm(true);
+  };
+
+  // Entrar en modo "editar usuario"
+  const startEditUser = (usuario: Usuario) => {
+    setEditingUser(usuario);
+    setNuevoNombre(usuario.nombre);
+    setNuevoApellido(usuario.apellido);
+    setNuevoEmail(usuario.email);
+    // asumimos que Usuario tiene rol_id
+    setNuevoRolId((usuario as any).rol_id ?? '');
+    setNuevoPassword('');
+    setCreateError('');
+    setShowForm(true);
+  };
+
+  // Crear o actualizar usuario
+  const handleSubmitUserForm = async (e: FormEvent) => {
     e.preventDefault();
     setCreateError('');
 
     if (!isAdmin) {
-      setCreateError('No tienes permisos para crear usuarios.');
+      setCreateError('No tienes permisos para administrar usuarios.');
       return;
     }
 
@@ -126,35 +153,52 @@ export function UsuariosPage() {
     try {
       setCreating(true);
 
-      // 1) Crear usuario en Supabase Auth
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: nuevoEmail,
-        password: nuevoPassword,
-      });
+      if (editingUser) {
+        // MODO EDICIÓN: actualizar datos en tabla usuarios (no tocamos Auth)
+        const { error: updateError } = await supabase
+          .from('usuarios')
+          .update({
+            nombre: nuevoNombre,
+            apellido: nuevoApellido,
+            // email: nuevoEmail, // podríamos dejar el email fijo para no complicar Auth
+            rol_id: nuevoRolId,
+          })
+          .eq('id', editingUser.id);
 
-      if (signUpError) {
-        console.error('Error en signUp:', signUpError);
-        throw new Error('No fue posible crear el usuario de autenticación.');
-      }
+        if (updateError) {
+          console.error('Error actualizando usuario:', updateError);
+          throw new Error('No fue posible actualizar el usuario.');
+        }
+      } else {
+        // MODO CREACIÓN: crear en Auth + tabla usuarios
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email: nuevoEmail,
+          password: nuevoPassword,
+        });
 
-      const user = signUpData.user;
-      if (!user) {
-        throw new Error('Supabase no devolvió el usuario creado.');
-      }
+        if (signUpError) {
+          console.error('Error en signUp:', signUpError);
+          throw new Error('No fue posible crear el usuario de autenticación.');
+        }
 
-      // 2) Insertar perfil en tabla usuarios
-      const { error: perfilError } = await supabase.from('usuarios').insert({
-        id: user.id,
-        nombre: nuevoNombre,
-        apellido: nuevoApellido,
-        email: nuevoEmail,
-        estado: true,
-        rol_id: nuevoRolId,
-      });
+        const user = signUpData.user;
+        if (!user) {
+          throw new Error('Supabase no devolvió el usuario creado.');
+        }
 
-      if (perfilError) {
-        console.error('Error creando perfil:', perfilError);
-        throw new Error('No fue posible guardar el perfil del usuario.');
+        const { error: perfilError } = await supabase.from('usuarios').insert({
+          id: user.id,
+          nombre: nuevoNombre,
+          apellido: nuevoApellido,
+          email: nuevoEmail,
+          estado: true,
+          rol_id: nuevoRolId,
+        });
+
+        if (perfilError) {
+          console.error('Error creando perfil:', perfilError);
+          throw new Error('No fue posible guardar el perfil del usuario.');
+        }
       }
 
       // limpiar formulario y recargar lista
@@ -163,17 +207,17 @@ export function UsuariosPage() {
       setNuevoEmail('');
       setNuevoPassword('');
       setNuevoRolId('');
+      setEditingUser(null);
       setShowForm(false);
       await loadData();
     } catch (error: any) {
-      console.error('Error creando usuario:', error);
-      setCreateError(error.message ?? 'Error al crear el usuario');
+      console.error('Error guardando usuario:', error);
+      setCreateError(error.message ?? 'Error al guardar el usuario');
     } finally {
       setCreating(false);
     }
   };
 
-  // Mientras verificamos rol, podemos mostrar loading ligero
   if (checkingRole || loading) {
     return (
       <AppLayout>
@@ -187,7 +231,6 @@ export function UsuariosPage() {
     );
   }
 
-  // Si NO es admin, bloquear página
   if (!isAdmin) {
     return (
       <AppLayout>
@@ -209,21 +252,20 @@ export function UsuariosPage() {
             <p className="text-gray-600">Administración de usuarios del sistema</p>
           </div>
 
-          {/* Botón solo visible para admin */}
           <button
-            onClick={() => setShowForm((prev) => !prev)}
+            onClick={startCreateUser}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 shadow"
           >
             <Plus size={18} />
-            {showForm ? 'Cancelar' : 'Nuevo usuario'}
+            Nuevo usuario
           </button>
         </div>
 
-        {/* Formulario de alta */}
+        {/* Formulario crear/editar */}
         {showForm && (
           <div className="bg-white rounded-xl shadow-md border border-gray-100 p-6 space-y-4">
             <h3 className="text-lg font-semibold text-gray-800 mb-2">
-              Registrar nuevo usuario
+              {editingUser ? 'Editar usuario' : 'Registrar nuevo usuario'}
             </h3>
 
             {createError && (
@@ -232,7 +274,10 @@ export function UsuariosPage() {
               </div>
             )}
 
-            <form className="grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={handleCreateUser}>
+            <form
+              className="grid grid-cols-1 md:grid-cols-2 gap-4"
+              onSubmit={handleSubmitUserForm}
+            >
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Nombre
@@ -266,23 +311,31 @@ export function UsuariosPage() {
                   value={nuevoEmail}
                   onChange={(e) => setNuevoEmail(e.target.value)}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={!!editingUser} // no permitimos cambiar email en edición
+                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    editingUser ? 'bg-gray-100 cursor-not-allowed' : ''
+                  }`}
                   placeholder="usuario@hospital.com"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Contraseña
-                </label>
-                <input
-                  type="password"
-                  value={nuevoPassword}
-                  onChange={(e) => setNuevoPassword(e.target.value)}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="••••••••"
-                />
-              </div>
+
+              {/* Campo contraseña solo al crear */}
+              {!editingUser && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Contraseña
+                  </label>
+                  <input
+                    type="password"
+                    value={nuevoPassword}
+                    onChange={(e) => setNuevoPassword(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="••••••••"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Rol
@@ -307,7 +360,10 @@ export function UsuariosPage() {
               <div className="md:col-span-2 flex justify-end gap-2 mt-2">
                 <button
                   type="button"
-                  onClick={() => setShowForm(false)}
+                  onClick={() => {
+                    setShowForm(false);
+                    setEditingUser(null);
+                  }}
                   className="px-4 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
                 >
                   Cancelar
@@ -317,7 +373,13 @@ export function UsuariosPage() {
                   disabled={creating}
                   className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
                 >
-                  {creating ? 'Guardando...' : 'Guardar usuario'}
+                  {creating
+                    ? editingUser
+                      ? 'Actualizando...'
+                      : 'Guardando...'
+                    : editingUser
+                    ? 'Guardar cambios'
+                    : 'Guardar usuario'}
                 </button>
               </div>
             </form>
@@ -381,7 +443,10 @@ export function UsuariosPage() {
                       </button>
                     </td>
                     <td className="px-6 py-4">
-                      <button className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                      <button
+                        onClick={() => startEditUser(usuario)}
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                      >
                         <Edit size={18} />
                       </button>
                     </td>
