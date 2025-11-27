@@ -3,7 +3,6 @@ import { AppLayout } from '../layouts/AppLayout';
 import { supabase } from '../lib/supabaseClient';
 import { Usuario, Rol } from '../types/domain';
 import { Users, Edit, Plus } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
 
 export function UsuariosPage() {
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
@@ -20,12 +19,52 @@ export function UsuariosPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
 
-  // perfil del usuario logueado para validar que sea ADMIN
-  const { perfil } = useAuth();
+  // si el usuario logueado es ADMIN
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [checkingRole, setCheckingRole] = useState(true);
 
   useEffect(() => {
     loadData();
+    checkCurrentUserRole();
   }, []);
+
+  const checkCurrentUserRole = async () => {
+    try {
+      setCheckingRole(true);
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+
+      const user = userData.user;
+      if (!user) {
+        setIsAdmin(false);
+        return;
+      }
+
+      const { data: perfil, error: perfilError } = await supabase
+        .from('usuarios')
+        .select(
+          `
+          *,
+          rol:roles(*)
+        `
+        )
+        .eq('id', user.id)
+        .single();
+
+      if (perfilError) {
+        console.error('Error obteniendo perfil del usuario actual:', perfilError);
+        setIsAdmin(false);
+        return;
+      }
+
+      setIsAdmin(perfil?.rol?.nombre === 'ADMIN');
+    } catch (err) {
+      console.error('Error comprobando rol actual:', err);
+      setIsAdmin(false);
+    } finally {
+      setCheckingRole(false);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -70,12 +109,11 @@ export function UsuariosPage() {
     }
   };
 
-  // Crear nuevo usuario (solo ADMIN)
   const handleCreateUser = async (e: FormEvent) => {
     e.preventDefault();
     setCreateError('');
 
-    if (!perfil || perfil.rol?.nombre !== 'ADMIN') {
+    if (!isAdmin) {
       setCreateError('No tienes permisos para crear usuarios.');
       return;
     }
@@ -89,11 +127,10 @@ export function UsuariosPage() {
       setCreating(true);
 
       // 1) Crear usuario en Supabase Auth
-      const { data: signUpData, error: signUpError } =
-        await supabase.auth.signUp({
-          email: nuevoEmail,
-          password: nuevoPassword,
-        });
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email: nuevoEmail,
+        password: nuevoPassword,
+      });
 
       if (signUpError) {
         console.error('Error en signUp:', signUpError);
@@ -136,20 +173,8 @@ export function UsuariosPage() {
     }
   };
 
-  // Si no es admin, bloquea la vista
-  if (perfil && perfil.rol?.nombre !== 'ADMIN') {
-    return (
-      <AppLayout>
-        <div className="flex items-center justify-center h-64">
-          <p className="text-gray-600">
-            No tienes permisos para acceder a la gestión de usuarios.
-          </p>
-        </div>
-      </AppLayout>
-    );
-  }
-
-  if (loading) {
+  // Mientras verificamos rol, podemos mostrar loading ligero
+  if (checkingRole || loading) {
     return (
       <AppLayout>
         <div className="flex items-center justify-center h-64">
@@ -157,6 +182,19 @@ export function UsuariosPage() {
             <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
             <p className="text-gray-600">Cargando usuarios...</p>
           </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  // Si NO es admin, bloquear página
+  if (!isAdmin) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-64">
+          <p className="text-gray-600">
+            No tienes permisos para acceder a la gestión de usuarios.
+          </p>
         </div>
       </AppLayout>
     );
@@ -172,15 +210,13 @@ export function UsuariosPage() {
           </div>
 
           {/* Botón solo visible para admin */}
-          {perfil?.rol?.nombre === 'ADMIN' && (
-            <button
-              onClick={() => setShowForm((prev) => !prev)}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 shadow"
-            >
-              <Plus size={18} />
-              {showForm ? 'Cancelar' : 'Nuevo usuario'}
-            </button>
-          )}
+          <button
+            onClick={() => setShowForm((prev) => !prev)}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 shadow"
+          >
+            <Plus size={18} />
+            {showForm ? 'Cancelar' : 'Nuevo usuario'}
+          </button>
         </div>
 
         {/* Formulario de alta */}
